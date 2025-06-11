@@ -1,0 +1,39 @@
+# Base requirements
+-r requirements.txt
+
+# Additional testing dependencies
+pytest-html==3.2.0
+pytest-xdist==3.3.1
+pytest-timeout==2.1.0
+pytest-benchmark==4.0.0
+pytest-randomly==3.12.0
+pytest-clarity==1.0.1
+pytest-mock==3.12.0
+pytest-env==0.8.2
+
+# Memory profiling
+psutil==5.9.6
+memory-profiler==0.61.0
+
+# Test data generation
+factory-boy==3.3.0
+mimesis==11.1.0
+
+# Load testing
+locust==2.17.0
+
+# API testing
+responses==0.24.1
+httpretty==1.1.4
+
+# Database testing
+pytest-postgresql==4.1.1
+sqlalchemy-utils==0.41.1
+
+# Async testing
+pytest-trio==0.8.0
+pytest-tornado==0.8.1
+
+# Reporting
+allure-pytest==2.13.2
+pytest-reportlog==1.2.0
