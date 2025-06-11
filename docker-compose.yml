@@ -12,11 +12,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - leadgen-network
 
   redis:
     image: redis:7-alpine
@@ -25,11 +28,14 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - leadgen-network
 
   rabbitmq:
     image: rabbitmq:3.12-management-alpine
@@ -37,16 +43,178 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
+      RABBITMQ_DEFAULT_VHOST: /
     ports:
       - "5672:5672"
       - "15672:15672"  # Management UI
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./docker/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 30s
       timeout: 10s
       retries: 5
+    networks:
+      - leadgen-network
+
+  # Main application service
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: lead_gen_app
+    env_file:
+      - .env.docker
+    ports:
+      - "8000:8000"
+      - "9090:9090"  # Prometheus metrics
+    volumes:
+      - ./logs:/app/logs
+      - ./results:/app/results
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: python cli.py status
+    healthcheck:
+      test: ["CMD", "python", "-c", "from config import get_settings; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - leadgen-network
+    restart: unless-stopped
+
+  # Worker services
+  enrichment-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: lead_gen_enrichment_worker
+    env_file:
+      - .env.docker
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: python cli.py worker enrichment --worker-id enrichment-1
+    healthcheck:
+      test: ["CMD", "python", "-c", "from config import get_settings; print('OK')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    networks:
+      - leadgen-network
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+  scoring-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: lead_gen_scoring_worker
+    env_file:
+      - .env.docker
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: python cli.py worker scoring --worker-id scoring-1
+    healthcheck:
+      test: ["CMD", "python", "-c", "from config import get_settings; print('OK')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    networks:
+      - leadgen-network
+    restart: unless-stopped
+
+  crm-sync-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: lead_gen_crm_worker
+    env_file:
+      - .env.docker
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: python cli.py worker crm-sync --worker-id crm-1
+    healthcheck:
+      test: ["CMD", "python", "-c", "from config import get_settings; print('OK')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    networks:
+      - leadgen-network
+    restart: unless-stopped
+
+  # Database initialization service
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: lead_gen_db_init
+    env_file:
+      - .env.docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python cli.py init-database
+    networks:
+      - leadgen-network
+    profiles:
+      - setup
+
+  # Scrapers (run on demand)
+  bls-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: lead_gen_bls_scraper
+    env_file:
+      - .env.docker
+    volumes:
+      - ./logs:/app/logs
+      - ./results:/app/results
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python cli.py scrape bls
+    networks:
+      - leadgen-network
+    profiles:
+      - scrapers
 
   # Optional: pgAdmin for database management
   pgadmin:
@@ -55,14 +223,80 @@ services:
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@example.com
       PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
       - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
     depends_on:
       - postgres
+    networks:
+      - leadgen-network
     profiles:
       - tools
+
+  # Optional: Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: lead_gen_redis_commander
+    environment:
+      REDIS_HOSTS: redis:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - leadgen-network
+    profiles:
+      - tools
+
+  # Optional: Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: lead_gen_prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    networks:
+      - leadgen-network
+    profiles:
+      - monitoring
+
+  # Optional: Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: lead_gen_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - leadgen-network
+    profiles:
+      - monitoring
 
 volumes:
   postgres_data:
   redis_data:
-  rabbitmq_data: 
+  rabbitmq_data:
+  pgadmin_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  leadgen-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16 

@@ -1,0 +1,61 @@
+# Prometheus configuration for Lead Generation System monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'lead-generation-system'
+    environment: 'docker'
+
+# Rules files specifies a list of globs for rules
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+# A scrape configuration containing exactly one endpoint to scrape
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Lead Generation Application metrics
+  - job_name: 'lead-gen-app'
+    static_configs:
+      - targets: ['app:9090']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+    
+  # PostgreSQL metrics (requires postgres_exporter)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    scrape_interval: 30s
+    
+  # Redis metrics (requires redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+    
+  # RabbitMQ metrics (built-in Prometheus support)
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['rabbitmq:15692']
+    scrape_interval: 30s
+
+  # Worker processes metrics
+  - job_name: 'workers'
+    static_configs:
+      - targets: 
+        - 'enrichment-worker:9090'
+        - 'scoring-worker:9090'
+        - 'crm-sync-worker:9090'
+    scrape_interval: 60s
+
+# Alerting configuration (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
