@@ -171,6 +171,201 @@ def crm_sync(worker_id):
         click.echo("\nWorker stopped.")
 
 
+@worker.command()
+def pipedrive():
+    """Run Pipedrive sync worker."""
+    click.echo("Starting Pipedrive sync worker...")
+    from workers.pipedrive_sync_worker import run_pipedrive_sync_worker
+    try:
+        asyncio.run(run_pipedrive_sync_worker())
+    except KeyboardInterrupt:
+        click.echo("\nWorker stopped.")
+
+
+@main.group()
+def pipedrive():
+    """Pipedrive CRM integration commands."""
+    pass
+
+
+@pipedrive.command()
+@click.option('--limit', '-l', default=50, help='Maximum number of records to sync')
+@click.option('--high-priority-only', is_flag=True, help='Sync only high-priority leads (score >= 80)')
+def sync(limit, high_priority_only):
+    """Sync pending records to Pipedrive CRM."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from api.pipedrive import PipedriveIntegrationService
+    from config.settings import get_settings
+    
+    settings = get_settings()
+    engine = create_engine(str(settings.database_url))
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+    
+    async def run_sync():
+        try:
+            async with PipedriveIntegrationService(db) as service:
+                if high_priority_only:
+                    from models.company import Company
+                    
+                    # Get high-scoring companies
+                    high_score_companies = (
+                        db.query(Company)
+                        .filter(
+                            Company.lead_score >= settings.high_score_threshold,
+                            Company.crm_sync_status == 'pending'
+                        )
+                        .limit(limit)
+                        .all()
+                    )
+                    
+                    click.echo(f"Syncing {len(high_score_companies)} high-priority companies...")
+                    
+                    synced_count = 0
+                    deals_created = 0
+                    
+                    for company in high_score_companies:
+                        try:
+                            success = await service.sync_company(company)
+                            if success:
+                                synced_count += 1
+                                
+                                # Create deal
+                                deal_success = await service.create_deal_for_high_score_lead(company)
+                                if deal_success:
+                                    deals_created += 1
+                                    
+                                click.echo(f"✓ Synced {company.name} (Score: {company.lead_score})")
+                            else:
+                                click.echo(f"✗ Failed to sync {company.name}")
+                        
+                        except Exception as e:
+                            click.echo(f"✗ Error syncing {company.name}: {e}")
+                    
+                    click.echo(f"\nHigh-priority sync completed:")
+                    click.echo(f"  Companies synced: {synced_count}")
+                    click.echo(f"  Deals created: {deals_created}")
+                    
+                else:
+                    # Regular sync
+                    click.echo(f"Syncing up to {limit} pending records...")
+                    stats = await service.sync_pending_records(limit=limit)
+                    
+                    click.echo("\nSync completed:")
+                    click.echo(f"  Companies synced: {stats['companies_synced']}")
+                    click.echo(f"  Contacts synced: {stats['contacts_synced']}")
+                    click.echo(f"  Deals created: {stats['deals_created']}")
+                    click.echo(f"  Companies failed: {stats['companies_failed']}")
+                    click.echo(f"  Contacts failed: {stats['contacts_failed']}")
+                    
+        except Exception as e:
+            click.echo(f"Sync failed: {e}", err=True)
+            raise click.Abort()
+        finally:
+            db.close()
+    
+    asyncio.run(run_sync())
+
+
+@pipedrive.command()
+def stats():
+    """Show Pipedrive sync statistics."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from api.pipedrive import PipedriveIntegrationService
+    from config.settings import get_settings
+    
+    settings = get_settings()
+    engine = create_engine(str(settings.database_url))
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+    
+    try:
+        service = PipedriveIntegrationService(db)
+        stats = service.get_sync_statistics()
+        
+        click.echo("Pipedrive Sync Statistics:")
+        click.echo("\nCompanies:")
+        for status, count in stats['companies'].items():
+            click.echo(f"  {status}: {count}")
+        
+        click.echo("\nContacts:")
+        for status, count in stats['contacts'].items():
+            click.echo(f"  {status}: {count}")
+        
+        click.echo(f"\nHigh-score companies (≥{settings.high_score_threshold}): {stats['high_score_companies']}")
+        
+    except Exception as e:
+        click.echo(f"Failed to get stats: {e}", err=True)
+        raise click.Abort()
+    finally:
+        db.close()
+
+
+@pipedrive.command()
+@click.option('--company-name', help='Specific company name to sync')
+@click.option('--company-id', help='Specific company UUID to sync')
+def sync_company(company_name, company_id):
+    """Sync a specific company to Pipedrive."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from api.pipedrive import PipedriveIntegrationService
+    from config.settings import get_settings
+    from models.company import Company
+    
+    if not company_name and not company_id:
+        click.echo("Please provide either --company-name or --company-id", err=True)
+        raise click.Abort()
+    
+    settings = get_settings()
+    engine = create_engine(str(settings.database_url))
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+    
+    async def run_sync():
+        try:
+            # Find company
+            query = db.query(Company)
+            if company_id:
+                query = query.filter(Company.id == company_id)
+            else:
+                query = query.filter(Company.name.ilike(f"%{company_name}%"))
+            
+            company = query.first()
+            if not company:
+                click.echo("Company not found", err=True)
+                raise click.Abort()
+            
+            click.echo(f"Syncing company: {company.name} (Score: {company.lead_score})")
+            
+            async with PipedriveIntegrationService(db) as service:
+                success = await service.sync_company(company)
+                
+                if success:
+                    click.echo(f"✓ Successfully synced {company.name}")
+                    click.echo(f"  Pipedrive ID: {company.pipedrive_id}")
+                    
+                    # Try to create deal if high score
+                    if company.lead_score >= settings.high_score_threshold:
+                        deal_success = await service.create_deal_for_high_score_lead(company)
+                        if deal_success:
+                            click.echo("✓ Created deal for high-scoring lead")
+                        else:
+                            click.echo("✗ Failed to create deal")
+                else:
+                    click.echo(f"✗ Failed to sync {company.name}")
+                    raise click.Abort()
+                    
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            raise click.Abort()
+        finally:
+            db.close()
+    
+    asyncio.run(run_sync())
+
+
 @main.command()
 def status():
     """Check system status."""
