@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lead Generation Dashboard - DPC Health Insurance</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --success-color: #27ae60;
+            --warning-color: #f39c12;
+            --danger-color: #e74c3c;
+            --info-color: #17a2b8;
+            --light-bg: #f8f9fa;
+            --dark-bg: #343a40;
+        }
+
+        body {
+            background-color: var(--light-bg);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .navbar-brand {
+            font-weight: bold;
+            font-size: 1.3rem;
+        }
+
+        .metric-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.08);
+            border: none;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 25px rgba(0,0,0,0.12);
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-label {
+            color: #6c757d;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-change {
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+
+        .metric-change.positive {
+            color: var(--success-color);
+        }
+
+        .metric-change.negative {
+            color: var(--danger-color);
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.08);
+            min-height: 400px;
+        }
+
+        .section-title {
+            color: var(--primary-color);
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--secondary-color);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-healthy { background-color: var(--success-color); }
+        .status-warning { background-color: var(--warning-color); }
+        .status-error { background-color: var(--danger-color); }
+
+        .queue-item {
+            background: white;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-left: 4px solid var(--secondary-color);
+        }
+
+        .table-responsive {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.08);
+        }
+
+        .refresh-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: var(--secondary-color);
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            transition: all 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            background: var(--primary-color);
+            transform: scale(1.1);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .spinning {
+            animation: spin 1s linear infinite;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            z-index: 1000;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--secondary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-chart-line me-2"></i>
+                DPC Health Insurance - Lead Generation Dashboard
+            </a>
+            <div class="navbar-nav ms-auto">
+                <span class="navbar-text me-3">
+                    <i class="fas fa-clock me-1"></i>
+                    Last Updated: <span id="lastUpdated">--</span>
+                </span>
+                <button class="btn btn-outline-light btn-sm" onclick="refreshAllData()">
+                    <i class="fas fa-sync-alt" id="refreshIcon"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <!-- Key Metrics Row -->
+        <div class="row">
+            <div class="col-12">
+                <h2 class="section-title">
+                    <i class="fas fa-tachometer-alt me-2"></i>Key Metrics
+                </h2>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="metric-value text-primary" id="totalCompanies">--</div>
+                            <div class="metric-label">Total Companies</div>
+                            <div class="metric-change" id="recentCompanies">--</div>
+                        </div>
+                        <div class="text-primary">
+                            <i class="fas fa-building fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="metric-value text-success" id="totalContacts">--</div>
+                            <div class="metric-label">Total Contacts</div>
+                            <div class="metric-change" id="recentContacts">--</div>
+                        </div>
+                        <div class="text-success">
+                            <i class="fas fa-users fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="metric-value text-warning" id="totalApiCosts">$--</div>
+                            <div class="metric-label">Monthly API Costs</div>
+                            <div class="metric-change" id="apiRequests">--</div>
+                        </div>
+                        <div class="text-warning">
+                            <i class="fas fa-dollar-sign fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="metric-value text-info" id="systemHealth">--</div>
+                            <div class="metric-label">System Health</div>
+                            <div class="metric-change" id="errorRate">--</div>
+                        </div>
+                        <div class="text-info">
+                            <i class="fas fa-heartbeat fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="row">
+            <div class="col-xl-8 col-lg-12">
+                <h3 class="section-title">
+                    <i class="fas fa-chart-area me-2"></i>Lead Generation Trends
+                </h3>
+                <div class="chart-container position-relative" id="trendsChartContainer">
+                    <div id="trendsChart"></div>
+                </div>
+            </div>
+
+            <div class="col-xl-4 col-lg-12">
+                <h3 class="section-title">
+                    <i class="fas fa-chart-pie me-2"></i>Lead Score Distribution
+                </h3>
+                <div class="chart-container position-relative" id="scoreChartContainer">
+                    <div id="scoreChart"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Usage and System Health Row -->
+        <div class="row">
+            <div class="col-xl-6 col-lg-12">
+                <h3 class="section-title">
+                    <i class="fas fa-plug me-2"></i>API Usage & Costs
+                </h3>
+                <div class="chart-container position-relative" id="apiChartContainer">
+                    <div id="apiChart"></div>
+                </div>
+            </div>
+
+            <div class="col-xl-6 col-lg-12">
+                <h3 class="section-title">
+                    <i class="fas fa-exclamation-triangle me-2"></i>Error Rates
+                </h3>
+                <div class="chart-container position-relative" id="errorChartContainer">
+                    <div id="errorChart"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Queue Status and Recent Operations -->
+        <div class="row">
+            <div class="col-xl-4 col-lg-12">
+                <h3 class="section-title">
+                    <i class="fas fa-list me-2"></i>Queue Status
+                </h3>
+                <div class="chart-container">
+                    <div id="queueStatus">
+                        <div class="text-center">
+                            <div class="loading-spinner"></div>
+                            <p class="mt-2 text-muted">Loading queue data...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-8 col-lg-12">
+                <h3 class="section-title">
+                    <i class="fas fa-history me-2"></i>Recent Operations
+                </h3>
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Source</th>
+                                <th>Status</th>
+                                <th>Records</th>
+                                <th>Duration</th>
+                                <th>Started</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recentOperations">
+                            <tr>
+                                <td colspan="6" class="text-center">
+                                    <div class="loading-spinner mx-auto"></div>
+                                    <p class="mt-2 text-muted">Loading operations...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Provider Details -->
+        <div class="row">
+            <div class="col-12">
+                <h3 class="section-title">
+                    <i class="fas fa-server me-2"></i>API Provider Performance
+                </h3>
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Provider</th>
+                                <th>Requests</th>
+                                <th>Success Rate</th>
+                                <th>Avg Response Time</th>
+                                <th>Total Cost</th>
+                                <th>Credits Used</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="apiProviders">
+                            <tr>
+                                <td colspan="7" class="text-center">
+                                    <div class="loading-spinner mx-auto"></div>
+                                    <p class="mt-2 text-muted">Loading API data...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Refresh Button -->
+    <button class="refresh-btn" onclick="refreshAllData()" title="Refresh Dashboard">
+        <i class="fas fa-sync-alt" id="floatingRefreshIcon"></i>
+    </button>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        let refreshInterval;
+        let isRefreshing = false;
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshAllData();
+            startAutoRefresh();
+        });
+
+        function startAutoRefresh() {
+            // Refresh every 30 seconds
+            refreshInterval = setInterval(refreshAllData, 30000);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        }
+
+        function showLoading(containerId) {
+            const container = document.getElementById(containerId);
+            if (container) {
+                const overlay = document.createElement('div');
+                overlay.className = 'loading-overlay';
+                overlay.innerHTML = '<div class="loading-spinner"></div>';
+                container.style.position = 'relative';
+                container.appendChild(overlay);
+            }
+        }
+
+        function hideLoading(containerId) {
+            const container = document.getElementById(containerId);
+            if (container) {
+                const overlay = container.querySelector('.loading-overlay');
+                if (overlay) {
+                    overlay.remove();
+                }
+            }
+        }
+
+        async function refreshAllData() {
+            if (isRefreshing) return;
+            
+            isRefreshing = true;
+            const refreshIcon = document.getElementById('refreshIcon');
+            const floatingRefreshIcon = document.getElementById('floatingRefreshIcon');
+            
+            refreshIcon.classList.add('spinning');
+            floatingRefreshIcon.classList.add('spinning');
+
+            try {
+                await Promise.all([
+                    loadKeyMetrics(),
+                    loadCharts(),
+                    loadSystemHealth(),
+                    loadQueueStatus()
+                ]);
+                
+                document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+            } catch (error) {
+                console.error('Error refreshing data:', error);
+                showAlert('Error loading dashboard data', 'danger');
+            } finally {
+                refreshIcon.classList.remove('spinning');
+                floatingRefreshIcon.classList.remove('spinning');
+                isRefreshing = false;
+            }
+        }
+
+        async function loadKeyMetrics() {
+            try {
+                const [leadsResponse, apiResponse] = await Promise.all([
+                    fetch('/api/metrics/leads'),
+                    fetch('/api/metrics/api-usage')
+                ]);
+
+                const leadsData = await leadsResponse.json();
+                const apiData = await apiResponse.json();
+
+                // Update key metrics
+                document.getElementById('totalCompanies').textContent = leadsData.totals.companies.toLocaleString();
+                document.getElementById('totalContacts').textContent = leadsData.totals.contacts.toLocaleString();
+                document.getElementById('totalApiCosts').textContent = '$' + apiData.totals.cost.toFixed(2);
+                
+                // Calculate recent changes
+                const recentCompanies = leadsData.totals.recent_companies;
+                const recentContacts = leadsData.totals.recent_contacts;
+                
+                document.getElementById('recentCompanies').innerHTML = 
+                    `<i class="fas fa-arrow-up"></i> +${recentCompanies} this week`;
+                document.getElementById('recentContacts').innerHTML = 
+                    `<i class="fas fa-arrow-up"></i> +${recentContacts} this week`;
+                document.getElementById('apiRequests').innerHTML = 
+                    `${apiData.totals.requests.toLocaleString()} requests`;
+
+                // Set change colors
+                document.getElementById('recentCompanies').className = 
+                    `metric-change ${recentCompanies > 0 ? 'positive' : 'negative'}`;
+                document.getElementById('recentContacts').className = 
+                    `metric-change ${recentContacts > 0 ? 'positive' : 'negative'}`;
+
+            } catch (error) {
+                console.error('Error loading key metrics:', error);
+            }
+        }
+
+        async function loadCharts() {
+            showLoading('trendsChartContainer');
+            showLoading('scoreChartContainer');
+            showLoading('apiChartContainer');
+            showLoading('errorChartContainer');
+
+            try {
+                const [trendsResponse, scoreResponse, apiResponse, errorResponse] = await Promise.all([
+                    fetch('/api/charts/leads-trend'),
+                    fetch('/api/charts/score-distribution'),
+                    fetch('/api/charts/api-costs'),
+                    fetch('/api/charts/error-rates')
+                ]);
+
+                const trendsData = await trendsResponse.json();
+                const scoreData = await scoreResponse.json();
+                const apiData = await apiResponse.json();
+                const errorData = await errorResponse.json();
+
+                // Render charts
+                Plotly.newPlot('trendsChart', trendsData.data, trendsData.layout, {responsive: true});
+                Plotly.newPlot('scoreChart', scoreData.data, scoreData.layout, {responsive: true});
+                Plotly.newPlot('apiChart', apiData.data, apiData.layout, {responsive: true});
+                Plotly.newPlot('errorChart', errorData.data, errorData.layout, {responsive: true});
+
+            } catch (error) {
+                console.error('Error loading charts:', error);
+            } finally {
+                hideLoading('trendsChartContainer');
+                hideLoading('scoreChartContainer');
+                hideLoading('apiChartContainer');
+                hideLoading('errorChartContainer');
+            }
+        }
+
+        async function loadSystemHealth() {
+            try {
+                const [healthResponse, apiResponse] = await Promise.all([
+                    fetch('/api/metrics/system-health'),
+                    fetch('/api/metrics/api-usage')
+                ]);
+
+                const healthData = await healthResponse.json();
+                const apiData = await apiResponse.json();
+
+                // Update system health indicator
+                const totalErrors = healthData.scraping_error_rates.reduce((sum, item) => sum + item.failures, 0);
+                const totalOperations = healthData.scraping_error_rates.reduce((sum, item) => sum + item.total, 0);
+                const overallErrorRate = totalOperations > 0 ? (totalErrors / totalOperations * 100) : 0;
+
+                let healthStatus = 'Healthy';
+                let healthClass = 'text-success';
+                if (overallErrorRate > 10) {
+                    healthStatus = 'Critical';
+                    healthClass = 'text-danger';
+                } else if (overallErrorRate > 5) {
+                    healthStatus = 'Warning';
+                    healthClass = 'text-warning';
+                }
+
+                document.getElementById('systemHealth').textContent = healthStatus;
+                document.getElementById('systemHealth').className = `metric-value ${healthClass}`;
+                document.getElementById('errorRate').innerHTML = `${overallErrorRate.toFixed(1)}% error rate`;
+
+                // Update recent operations table
+                updateRecentOperations(healthData.recent_operations);
+                
+                // Update API providers table
+                updateApiProviders(apiData.provider_usage, apiData.success_rates);
+
+            } catch (error) {
+                console.error('Error loading system health:', error);
+            }
+        }
+
+        async function loadQueueStatus() {
+            try {
+                const response = await fetch('/api/metrics/queues');
+                const data = await response.json();
+
+                let queueHtml = '';
+                const queues = data.queue_depths || {};
+                
+                if (Object.keys(queues).length === 0) {
+                    queueHtml = '<div class="text-center text-muted">No queue data available</div>';
+                } else {
+                    for (const [queueName, depth] of Object.entries(queues)) {
+                        const status = depth > 1000 ? 'danger' : depth > 500 ? 'warning' : 'success';
+                        queueHtml += `
+                            <div class="queue-item">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>${queueName.replace('_', ' ').toUpperCase()}</strong>
+                                        <br>
+                                        <small class="text-muted">Queue depth</small>
+                                    </div>
+                                    <div class="text-end">
+                                        <span class="badge bg-${status} fs-6">${depth}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+
+                document.getElementById('queueStatus').innerHTML = queueHtml;
+
+            } catch (error) {
+                console.error('Error loading queue status:', error);
+                document.getElementById('queueStatus').innerHTML = 
+                    '<div class="text-center text-danger">Error loading queue data</div>';
+            }
+        }
+
+        function updateRecentOperations(operations) {
+            const tbody = document.getElementById('recentOperations');
+            
+            if (operations.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No recent operations</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = operations.map(op => {
+                const statusClass = op.status === 'success' ? 'success' : 
+                                  op.status === 'failed' ? 'danger' : 'warning';
+                const duration = op.duration ? `${op.duration}s` : '--';
+                const startTime = op.started_at ? new Date(op.started_at).toLocaleString() : '--';
+                const errorMsg = op.error_message ? 
+                    `<span title="${op.error_message}" class="text-truncate" style="max-width: 150px; display: inline-block;">${op.error_message}</span>` : 
+                    '--';
+
+                return `
+                    <tr>
+                        <td><strong>${op.source}</strong></td>
+                        <td><span class="badge bg-${statusClass}">${op.status}</span></td>
+                        <td>${op.records_processed.toLocaleString()}</td>
+                        <td>${duration}</td>
+                        <td>${startTime}</td>
+                        <td>${errorMsg}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function updateApiProviders(providers, successRates) {
+            const tbody = document.getElementById('apiProviders');
+            
+            if (providers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No API data available</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = providers.map(provider => {
+                const successRate = successRates.find(sr => sr.provider === provider.provider);
+                const successPercent = successRate ? successRate.success_rate : 0;
+                const statusClass = successPercent > 95 ? 'success' : 
+                                  successPercent > 90 ? 'warning' : 'danger';
+                const statusText = successPercent > 95 ? 'Healthy' : 
+                                 successPercent > 90 ? 'Warning' : 'Critical';
+
+                return `
+                    <tr>
+                        <td><strong>${provider.provider}</strong></td>
+                        <td>${provider.requests.toLocaleString()}</td>
+                        <td>${successPercent.toFixed(1)}%</td>
+                        <td>${provider.avg_response_time.toFixed(0)}ms</td>
+                        <td>$${provider.cost.toFixed(2)}</td>
+                        <td>${provider.credits.toLocaleString()}</td>
+                        <td><span class="badge bg-${statusClass}">${statusText}</span></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function showAlert(message, type = 'info') {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(alertDiv);
+
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+
+        // Handle window resize for chart responsiveness
+        window.addEventListener('resize', function() {
+            Plotly.Plots.resize('trendsChart');
+            Plotly.Plots.resize('scoreChart');
+            Plotly.Plots.resize('apiChart');
+            Plotly.Plots.resize('errorChart');
+        });
+
+        // Handle page visibility change to pause/resume auto-refresh
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                stopAutoRefresh();
+            } else {
+                startAutoRefresh();
+                refreshAllData();
+            }
+        });
+    </script>
+</body>
+</html>
