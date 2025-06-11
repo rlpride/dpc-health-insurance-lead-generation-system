@@ -5,9 +5,11 @@ import asyncio
 from pathlib import Path
 
 from utils import setup_logging
-from models import init_db, drop_db
+from models import init_db, drop_db, get_db_session, Company
 from scrapers import BLSScraper, SamGovScraper
 from workers import EnrichmentWorker, ScoringWorker, CrmSyncWorker
+from lead_generation_system.enrichment_service import EnrichmentService
+from config.settings import Settings
 
 
 @click.group()
@@ -19,11 +21,11 @@ def main(debug: bool):
 
 @main.command()
 def init_database():
-    """Initialize the database schema."""
+    """Initialize database tables."""
     click.echo("Initializing database...")
     try:
         init_db()
-        click.echo("Database initialized successfully!")
+        click.echo("Database initialized!")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         raise click.Abort()
@@ -42,143 +44,205 @@ def drop_database():
         raise click.Abort()
 
 
-@main.group()
-def scrape():
-    """Run web scrapers."""
-    pass
-
-
-@scrape.command()
-@click.option('--states', '-s', multiple=True, help='States to scrape (e.g., CA TX)')
-@click.option('--naics', '-n', multiple=True, help='NAICS codes to target')
-def bls(states, naics):
-    """Run BLS scraper."""
-    click.echo("Starting BLS scraper...")
-    scraper = BLSScraper()
+@main.command()
+@click.option('--worker-type', type=click.Choice(['enrichment', 'scoring', 'crm_sync']), 
+              required=True, help='Type of worker to start')
+@click.option('--worker-id', help='Worker ID (optional)')
+@click.option('--max-messages', type=int, default=100, help='Maximum messages to process')
+def start_worker(worker_type: str, worker_id: str, max_messages: int):
+    """Start a worker process."""
+    click.echo(f"Starting {worker_type} worker...")
     
-    async def run():
-        kwargs = {}
-        if states:
-            kwargs['states'] = list(states)
-        if naics:
-            kwargs['naics_codes'] = list(naics)
-        
-        result = await scraper.run(**kwargs)
-        if result['success']:
-            click.echo(f"✓ Scraped {result['stats']['records_processed']} records")
-            click.echo(f"  Created: {result['stats']['records_created']}")
-            click.echo(f"  Updated: {result['stats']['records_updated']}")
-        else:
-            click.echo(f"✗ Scraping failed: {result['error']}", err=True)
+    worker_classes = {
+        'enrichment': EnrichmentWorker,
+        'scoring': ScoringWorker,
+        'crm_sync': CrmSyncWorker
+    }
     
-    asyncio.run(run())
-
-
-@scrape.command()
-@click.option('--year', type=int, help='Year to scrape (default: previous year)')
-@click.option('--quarter', type=int, default=4, help='Quarter to scrape (1-4)')
-@click.option('--states', help='Comma-separated state codes (e.g., CA,TX,FL)')
-@click.option('--naics', help='Comma-separated NAICS codes (e.g., 23,42,54)')
-@click.option('--size-classes', help='Comma-separated size classes (e.g., 5,6,7)')
-@click.option('--delay', type=float, default=2.0, help='Download delay in seconds')
-@click.option('--output-format', type=click.Choice(['json', 'csv', 'both']), 
-              default='both', help='Output format')
-@click.option('--output-dir', default='results', help='Output directory')
-@click.option('--dry-run', is_flag=True, help='Show what would be scraped without scraping')
-def bls_scrapy(year, quarter, states, naics, size_classes, delay, output_format, output_dir, dry_run):
-    """Run BLS QCEW Scrapy spider."""
-    click.echo("Starting BLS QCEW Scrapy spider...")
-    
-    import subprocess
-    import sys
-    
-    # Build command arguments
-    cmd = ['python3', 'scripts/run_bls_spider.py']
-    
-    if year:
-        cmd.extend(['--year', str(year)])
-    cmd.extend(['--quarter', str(quarter)])
-    
-    if states:
-        cmd.extend(['--states', states])
-    if naics:
-        cmd.extend(['--naics', naics])
-    if size_classes:
-        cmd.extend(['--size-classes', size_classes])
-    
-    cmd.extend(['--delay', str(delay)])
-    cmd.extend(['--output-format', output_format])
-    cmd.extend(['--output-dir', output_dir])
-    
-    if dry_run:
-        cmd.append('--dry-run')
-    
-    # Run the spider
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        click.echo(result.stdout)
-        if result.stderr:
-            click.echo(f"Warnings: {result.stderr}", err=True)
-        click.echo("BLS Scrapy spider completed successfully!")
-    except subprocess.CalledProcessError as e:
-        click.echo(f"Spider failed: {e}", err=True)
-        if e.stdout:
-            click.echo(f"Output: {e.stdout}")
-        if e.stderr:
-            click.echo(f"Error: {e.stderr}", err=True)
-        sys.exit(1)
-
-
-@main.group()
-def worker():
-    """Run background workers."""
-    pass
-
-
-@worker.command()
-@click.option('--worker-id', help='Unique worker ID')
-def enrichment(worker_id):
-    """Run enrichment worker."""
-    click.echo("Starting enrichment worker...")
-    worker = EnrichmentWorker(worker_id)
-    try:
-        worker.run()
+        worker_class = worker_classes[worker_type]
+        worker = worker_class(worker_id)
+        worker.start(max_messages=max_messages)
     except KeyboardInterrupt:
-        click.echo("\nWorker stopped.")
-
-
-@worker.command()
-@click.option('--worker-id', help='Unique worker ID')
-def scoring(worker_id):
-    """Run scoring worker."""
-    click.echo("Starting scoring worker...")
-    worker = ScoringWorker(worker_id)
-    try:
-        worker.run()
-    except KeyboardInterrupt:
-        click.echo("\nWorker stopped.")
-
-
-@worker.command()
-@click.option('--worker-id', help='Unique worker ID')
-def crm_sync(worker_id):
-    """Run CRM sync worker."""
-    click.echo("Starting CRM sync worker...")
-    worker = CrmSyncWorker(worker_id)
-    try:
-        worker.run()
-    except KeyboardInterrupt:
-        click.echo("\nWorker stopped.")
+        click.echo("Worker stopped by user")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
 
 
 @main.command()
-def status():
-    """Check system status."""
-    click.echo("System Status:")
-    click.echo("- Database: Connected ✓")
-    click.echo("- Redis: Connected ✓")
-    click.echo("- RabbitMQ: Connected ✓")
-    click.echo("\nTODO: Implement actual status checks")
+@click.option('--state', help='Filter by state (e.g., CA, NY)')
+@click.option('--limit', type=int, default=10, help='Number of companies to enrich')
+@click.option('--force', is_flag=True, help='Force re-enrichment even if recently enriched')
+def enrich_companies(state: str, limit: int, force: bool):
+    """Enrich companies with decision-maker contacts."""
+    click.echo(f"Starting enrichment for {limit} companies...")
+    
+    try:
+        settings = Settings()
+        enrichment_service = EnrichmentService(settings)
+        
+        # Get companies to enrich
+        with get_db_session() as db:
+            query = db.query(Company)
+            
+            if state:
+                query = query.filter(Company.state == state.upper())
+            
+            if not force:
+                query = query.filter(Company.enrichment_status != "enriched")
+            
+            companies = query.limit(limit).all()
+            
+            if not companies:
+                click.echo("No companies found to enrich")
+                return
+            
+            click.echo(f"Found {len(companies)} companies to enrich")
+            
+            # Enrich companies
+            for i, company in enumerate(companies, 1):
+                click.echo(f"[{i}/{len(companies)}] Enriching {company.name}...")
+                
+                try:
+                    success, contacts = asyncio.run(enrichment_service.enrich_company(company))
+                    
+                    if success:
+                        click.echo(f"  ✓ Found {len(contacts)} decision-makers")
+                    else:
+                        click.echo(f"  ✗ No contacts found")
+                        
+                except Exception as e:
+                    click.echo(f"  ✗ Error: {str(e)}")
+            
+            click.echo("Enrichment complete!")
+            
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+@main.command()
+@click.argument('company_name')
+@click.option('--state', help='Company state')
+@click.option('--domain', help='Company email domain')
+def test_enrichment(company_name: str, state: str, domain: str):
+    """Test enrichment for a specific company."""
+    click.echo(f"Testing enrichment for: {company_name}")
+    
+    try:
+        settings = Settings()
+        enrichment_service = EnrichmentService(settings)
+        
+        # Create a temporary company object for testing
+        from uuid import uuid4
+        test_company = Company(
+            id=uuid4(),
+            name=company_name,
+            state=state,
+            email_domain=domain,
+            source="test"
+        )
+        
+        # Find decision-makers
+        click.echo("Finding decision-makers...")
+        decision_makers = asyncio.run(enrichment_service.find_decision_makers(test_company))
+        
+        if not decision_makers:
+            click.echo("No decision-makers found")
+            return
+        
+        click.echo(f"Found {len(decision_makers)} decision-makers:")
+        
+        for i, contact in enumerate(decision_makers, 1):
+            click.echo(f"\n{i}. {contact.get('full_name', 'Unknown')}")
+            click.echo(f"   Title: {contact.get('title', 'Unknown')}")
+            click.echo(f"   Email: {contact.get('email', 'Not found')}")
+            click.echo(f"   Source: {contact.get('source', 'Unknown')}")
+            click.echo(f"   Department: {contact.get('department', 'Unknown')}")
+        
+        # Test email verification
+        if any(c.get('email') for c in decision_makers):
+            click.echo("\nTesting email verification...")
+            verified_contacts = asyncio.run(enrichment_service.verify_contacts(decision_makers))
+            
+            verified_count = sum(1 for c in verified_contacts if c.get('email_verified'))
+            click.echo(f"Email verification: {verified_count}/{len(decision_makers)} verified")
+        
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+@main.command()
+def enrichment_stats():
+    """Show enrichment statistics and API usage."""
+    click.echo("Getting enrichment statistics...")
+    
+    try:
+        settings = Settings()
+        enrichment_service = EnrichmentService(settings)
+        
+        stats = asyncio.run(enrichment_service.get_enrichment_stats())
+        
+        if not stats:
+            click.echo("No statistics available")
+            return
+        
+        click.echo(f"\n=== Enrichment Statistics ({stats.get('month', 'N/A')}) ===")
+        
+        # API Usage
+        click.echo("\nAPI Usage:")
+        for provider, usage in stats.get('api_usage', {}).items():
+            click.echo(f"  {provider.title()}:")
+            click.echo(f"    Requests: {usage['total_requests']} (success rate: {usage['success_rate']:.1%})")
+            click.echo(f"    Cost: ${usage['total_cost']:.2f}")
+        
+        # Companies
+        companies = stats.get('companies', {})
+        click.echo(f"\nCompanies:")
+        click.echo(f"  Total: {companies.get('total', 0)}")
+        click.echo(f"  Enriched: {companies.get('enriched', 0)} ({companies.get('enrichment_rate', 0):.1%})")
+        
+        # Contacts
+        contacts = stats.get('contacts', {})
+        click.echo(f"\nContacts:")
+        click.echo(f"  Total: {contacts.get('total', 0)}")
+        click.echo(f"  Verified: {contacts.get('verified', 0)} ({contacts.get('verification_rate', 0):.1%})")
+        
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+@main.command()
+@click.option('--scraper', type=click.Choice(['bls', 'sam_gov']), required=True)
+@click.option('--state', help='State to scrape (2-letter code)')
+@click.option('--limit', type=int, default=100, help='Maximum companies to collect')
+def collect_companies(scraper: str, state: str, limit: int):
+    """Collect companies using specified scraper."""
+    click.echo(f"Starting {scraper.upper()} scraper...")
+    
+    scrapers = {
+        'bls': BLSScraper,
+        'sam_gov': SamGovScraper
+    }
+    
+    try:
+        scraper_class = scrapers[scraper]
+        scraper_instance = scraper_class()
+        
+        # Run scraper with parameters
+        if scraper == 'bls':
+            companies = scraper_instance.scrape_by_state(state, limit=limit)
+        else:
+            companies = scraper_instance.scrape_companies(limit=limit, state=state)
+        
+        click.echo(f"Collected {len(companies)} companies")
+        
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
 
 
 if __name__ == "__main__":
